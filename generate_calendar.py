@@ -1,11 +1,14 @@
 import requests
 import hashlib
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
 
 API = "https://economic-calendar-api-h9hr.onrender.com/events"
 
-# Countries/currencies we want.
-# USD is intentionally excluded because AIO already covers US events.
+# ============================================================
+# SETTINGS
+# ============================================================
+
 COUNTRIES = {
     "GBR": "GBP",
     "JPN": "JPY",
@@ -28,11 +31,134 @@ EURO_COUNTRIES = [
     "FIN",
 ]
 
+ALLOWED_CURRENCIES = {
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+}
+
+# Keep only events that contain one of these terms.
+IMPORTANT_TERMS = [
+    # Central banks / interest rates
+    "interest rate",
+    "rate decision",
+    "rate statement",
+    "monetary policy",
+    "monetary policy statement",
+    "monetary policy report",
+    "central bank",
+    "press conference",
+    "policy rate",
+    "cash rate",
+    "official bank rate",
+    "bank rate",
+    "deposit facility rate",
+    "refinancing rate",
+    "overnight rate",
+
+    # Inflation
+    "consumer price index",
+    "cpi",
+    "inflation rate",
+    "core inflation",
+    "harmonised index of consumer prices",
+    "harmonized index of consumer prices",
+    "hicp",
+
+    # Employment
+    "employment change",
+    "unemployment rate",
+    "unemployment change",
+    "unemployment",
+    "employment rate",
+    "jobless rate",
+    "claimant count",
+    "labor force",
+    "labour force",
+
+    # GDP
+    "gross domestic product",
+    "gdp",
+
+    # Major activity indicators
+    "manufacturing pmi",
+    "services pmi",
+    "composite pmi",
+
+    # Consumption
+    "retail sales",
+
+    # Wages
+    "average earnings",
+    "average weekly earnings",
+    "wage price index",
+    "wage growth",
+
+    # Important central-bank specific events
+    "ecb",
+    "bank of england",
+    "boe",
+    "bank of japan",
+    "boj",
+    "snb",
+    "swiss national bank",
+    "bank of canada",
+    "boc",
+    "reserve bank of australia",
+    "rba",
+    "reserve bank of new zealand",
+    "rbnz",
+]
+
+
+# Things that are often labelled important by datasets but
+# aren't useful enough for this clean trading calendar.
+EXCLUDE_TERMS = [
+    "credit card spending",
+    "buba monthly report",
+    "bundesbank monthly report",
+    "consumer confidence",
+    "business confidence",
+    "economic sentiment",
+    "construction output",
+    "industrial production",
+    "factory orders",
+    "trade balance",
+    "current account",
+    "government budget",
+    "government debt",
+    "bond auction",
+    "car registrations",
+    "vehicle sales",
+    "housing starts",
+    "building permits",
+    "house price",
+    "home loans",
+    "mortgage",
+    "tourist arrivals",
+    "tourism",
+    "foreign exchange reserves",
+    "money supply",
+    "producer price",
+    "ppi",
+    "wholesale prices",
+]
+
+
+# ============================================================
+# ICS HELPERS
+# ============================================================
 
 def escape_ics(value):
     value = str(value or "")
+
     return (
-        value.replace("\\", "\\\\")
+        value
+        .replace("\\", "\\\\")
         .replace(";", "\\;")
         .replace(",", "\\,")
         .replace("\n", "\\n")
@@ -42,15 +168,22 @@ def escape_ics(value):
 def parse_datetime(value):
     value = str(value).strip()
 
-    # Main format returned by this API:
+    # API format:
     # MM/DD/YYYY HH:MM:SS
     try:
-        dt = datetime.strptime(value, "%m/%d/%Y %H:%M:%S")
-        return dt.replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(
+            value,
+            "%m/%d/%Y %H:%M:%S"
+        )
+
+        return dt.replace(
+            tzinfo=timezone.utc
+        )
+
     except ValueError:
         pass
 
-    # Fallback for ISO timestamps
+    # ISO fallback
     try:
         if value.endswith("Z"):
             value = value[:-1] + "+00:00"
@@ -58,20 +191,34 @@ def parse_datetime(value):
         dt = datetime.fromisoformat(value)
 
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(
+                tzinfo=timezone.utc
+            )
 
-        return dt.astimezone(timezone.utc)
+        return dt.astimezone(
+            timezone.utc
+        )
 
     except ValueError:
-        raise ValueError(f"Unknown date format: {value}")
+        raise ValueError(
+            f"Unknown date format: {value}"
+        )
 
 
 def extract_events(data):
+
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
-        for key in ["events", "data", "results", "items"]:
+
+        for key in [
+            "events",
+            "data",
+            "results",
+            "items",
+        ]:
+
             value = data.get(key)
 
             if isinstance(value, list):
@@ -80,8 +227,54 @@ def extract_events(data):
     return []
 
 
-def fetch_country(country, default_currency):
-    print(f"Fetching {country} ({default_currency})...")
+# ============================================================
+# EVENT FILTER
+# ============================================================
+
+def normalize(text):
+    text = str(text or "").lower()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+def is_important_event(name):
+
+    name = normalize(name)
+
+    # First remove unwanted events
+    for term in EXCLUDE_TERMS:
+
+        if term in name:
+            return False
+
+    # Then check important events
+    for term in IMPORTANT_TERMS:
+
+        if term in name:
+            return True
+
+    return False
+
+
+# ============================================================
+# FETCH EVENTS
+# ============================================================
+
+def fetch_country(
+    country,
+    default_currency
+):
+
+    print(
+        f"Fetching {country} "
+        f"({default_currency})..."
+    )
 
     response = requests.get(
         API,
@@ -92,28 +285,27 @@ def fetch_country(country, default_currency):
         timeout=90,
     )
 
-    print("Status:", response.status_code)
+    print(
+        "Status:",
+        response.status_code
+    )
+
     response.raise_for_status()
 
     data = response.json()
+
     rows = extract_events(data)
 
-    print("Rows returned:", len(rows))
+    print(
+        "Rows returned:",
+        len(rows)
+    )
 
     output = []
 
     for row in rows:
+
         if not isinstance(row, dict):
-            continue
-
-        # Extra safety check: only HIGH impact.
-        impact = str(
-            row.get("Impact")
-            or row.get("impact")
-            or ""
-        ).strip().upper()
-
-        if impact and impact != "HIGH":
             continue
 
         start = (
@@ -137,70 +329,134 @@ def fetch_country(country, default_currency):
             or default_currency
         )
 
-        currency = str(currency).upper().strip()
-
-        # Never include USD.
-        if currency == "USD":
-            continue
-
         if not start or not name:
             continue
 
-        try:
-            dt = parse_datetime(start)
-        except Exception as error:
-            print("Skipping date:", start, error)
+        currency = str(
+            currency
+        ).upper().strip()
+
+        # Never include USD
+        if currency == "USD":
             continue
 
-        uid_source = f"{currency}|{name}|{dt.isoformat()}"
+        # Force euro-area countries to EUR
+        if default_currency == "EUR":
+            currency = "EUR"
 
-        uid = hashlib.sha256(
-            uid_source.encode("utf-8")
-        ).hexdigest()[:24]
+        if currency not in ALLOWED_CURRENCIES:
+            continue
+
+        # Only our important events
+        if not is_important_event(name):
+            continue
+
+        try:
+
+            dt = parse_datetime(start)
+
+        except Exception as error:
+
+            print(
+                "Skipping bad date:",
+                start,
+                error
+            )
+
+            continue
 
         output.append({
             "currency": currency,
             "name": str(name),
             "dt": dt,
-            "uid": uid,
         })
 
     return output
 
 
+# ============================================================
+# COLLECT
+# ============================================================
+
 events = []
 
-# GBP, JPY, CHF, CAD, AUD and NZD
+
+# GBP / JPY / CHF / CAD / AUD / NZD
 for country, currency in COUNTRIES.items():
+
     events.extend(
-        fetch_country(country, currency)
+        fetch_country(
+            country,
+            currency
+        )
     )
 
-# EUR events
+
+# EUR
 for country in EURO_COUNTRIES:
-    country_events = fetch_country(country, "EUR")
 
-    for event in country_events:
-        # Force euro-area events to EUR
-        event["currency"] = "EUR"
+    events.extend(
+        fetch_country(
+            country,
+            "EUR"
+        )
+    )
 
-    events.extend(country_events)
+
+# ============================================================
+# DATE RANGE
+# ============================================================
+
+now_dt = datetime.now(
+    timezone.utc
+)
+
+today = now_dt.replace(
+    hour=0,
+    minute=0,
+    second=0,
+    microsecond=0,
+)
+
+end_date = (
+    today
+    + timedelta(days=365)
+)
 
 
-# Remove duplicates
+events = [
+    event
+    for event in events
+
+    if today
+    <= event["dt"]
+    <= end_date
+]
+
+
+# ============================================================
+# REMOVE DUPLICATES
+# ============================================================
+
 unique_events = {}
 
+
 for event in events:
+
+    # Remove country duplicates for EUR releases
     key = (
         event["currency"],
-        event["name"],
+        normalize(event["name"]),
         event["dt"].isoformat(),
     )
 
     unique_events[key] = event
 
 
-events = list(unique_events.values())
+events = list(
+    unique_events.values()
+)
+
 
 events.sort(
     key=lambda event: event["dt"]
@@ -209,15 +465,18 @@ events.sort(
 
 print("")
 print(
-    "TOTAL HIGH-IMPACT EVENTS:",
+    "FINAL EVENTS:",
     len(events)
 )
 
 
-# Create the ICS calendar
-now = datetime.now(
-    timezone.utc
-).strftime("%Y%m%dT%H%M%SZ")
+# ============================================================
+# BUILD CALENDAR
+# ============================================================
+
+dtstamp = now_dt.strftime(
+    "%Y%m%dT%H%M%SZ"
+)
 
 
 lines = [
@@ -227,7 +486,7 @@ lines = [
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "X-WR-CALNAME:🌍 Global Forex — High Impact",
-    "X-WR-CALDESC:High-impact global forex events excluding USD",
+    "X-WR-CALDESC:Major global forex events excluding USD",
 ]
 
 
@@ -237,20 +496,36 @@ for event in events:
         "%Y%m%dT%H%M%SZ"
     )
 
+    uid_source = (
+        f"{event['currency']}|"
+        f"{event['name']}|"
+        f"{event['dt'].isoformat()}"
+    )
+
+    uid = hashlib.sha256(
+        uid_source.encode("utf-8")
+    ).hexdigest()[:24]
+
     lines.extend([
         "BEGIN:VEVENT",
 
-        f"UID:{event['uid']}@saafman-dev.github.io",
+        f"UID:{uid}@saafman-dev.github.io",
 
-        f"DTSTAMP:{now}",
+        f"DTSTAMP:{dtstamp}",
 
         f"DTSTART:{start}",
 
-        f"SUMMARY:🔴 {event['currency']} — "
-        f"{escape_ics(event['name'])}",
+        (
+            f"SUMMARY:🔴 "
+            f"{event['currency']} — "
+            f"{escape_ics(event['name'])}"
+        ),
 
-        f"DESCRIPTION:High-impact "
-        f"{event['currency']} economic event.",
+        (
+            f"DESCRIPTION:"
+            f"Major {event['currency']} "
+            f"economic event."
+        ),
 
         "BEGIN:VALARM",
 
@@ -258,7 +533,11 @@ for event in events:
 
         "ACTION:DISPLAY",
 
-        "DESCRIPTION:High-impact market event in 30 minutes",
+        (
+            "DESCRIPTION:"
+            "Major market event "
+            "in 30 minutes"
+        ),
 
         "END:VALARM",
 
@@ -271,6 +550,10 @@ lines.append(
 )
 
 
+# ============================================================
+# SAVE
+# ============================================================
+
 with open(
     "global-forex-high.ics",
     "w",
@@ -279,7 +562,8 @@ with open(
 ) as file:
 
     file.write(
-        "\r\n".join(lines) + "\r\n"
+        "\r\n".join(lines)
+        + "\r\n"
     )
 
 
