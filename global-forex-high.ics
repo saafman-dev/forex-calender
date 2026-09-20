@@ -1,8 +1,8 @@
-BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//saafman-dev//Global Forex High Impact//EN
-CALSCALE:GREGORIAN
-METHOD:PUBLISH
-X-WR-CALNAME:🌍 Global Forex — High Impact
-X-WR-CALDESC:High-impact global forex events excluding USD
-END:VCALENDAR
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//saafman-dev//Global Forex High Impact//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+X-WR-CALNAME:🌍 Global Forex — High Impact
+X-WR-CALDESC:High-impact global forex events excluding USD
+END:VCALENDAR
