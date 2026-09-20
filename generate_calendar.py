@@ -6,8 +6,7 @@ from datetime import datetime, timezone, timedelta
 API = "https://economic-calendar-api-h9hr.onrender.com/events"
 
 # ============================================================
-# CURRENCIES
-# USD intentionally excluded — AIO handles USD.
+# COUNTRIES
 # ============================================================
 
 COUNTRIES = {
@@ -17,265 +16,254 @@ COUNTRIES = {
     "CAN": "CAD",
     "AUS": "AUD",
     "NZL": "NZD",
-}
 
-EURO_COUNTRIES = [
-    "DEU",
-    "FRA",
-    "ITA",
-    "ESP",
-    "NLD",
-    "BEL",
-    "AUT",
-    "IRL",
-    "PRT",
-    "FIN",
-]
-
-ALLOWED_CURRENCIES = {
-    "EUR",
-    "GBP",
-    "JPY",
-    "CHF",
-    "CAD",
-    "AUD",
-    "NZD",
+    # Only the most important Euro-area national releases
+    "DEU": "EUR",
+    "FRA": "EUR",
+    "ITA": "EUR",
+    "ESP": "EUR",
 }
 
 
 # ============================================================
-# STRICT HIGH-IMPACT FILTER
+# CURRENCY-SPECIFIC IMPORTANT EVENTS
 # ============================================================
 
-# These are the event families we actually want.
-IMPORTANT_PATTERNS = [
+PATTERNS = {
 
-    # --------------------------------------------------------
-    # CENTRAL BANKS / RATES
-    # --------------------------------------------------------
+    "GBP": [
+        r"\bboe\b.*\brate\b",
+        r"\bbank of england\b.*\brate\b",
+        r"\bofficial bank rate\b",
+        r"\bmonetary policy statement\b",
+        r"\bmonetary policy report\b",
+        r"\bboe minutes\b",
 
-    r"\binterest rate decision\b",
-    r"\binterest rate\b",
-    r"\brate decision\b",
-    r"\bpolicy rate\b",
-    r"\bofficial bank rate\b",
-    r"\bcash rate\b",
+        r"\bcpi\b",
+        r"\binflation rate\b",
 
-    r"\bmonetary policy statement\b",
-    r"\bmonetary policy report\b",
-    r"\bmonetary policy decision\b",
+        r"\bunemployment rate\b",
+        r"\bemployment change\b",
+        r"\bclaimant count change\b",
+        r"\baverage earnings\b",
+        r"\baverage weekly earnings\b",
 
-    r"\becb press conference\b",
-    r"\becb interest rate\b",
-    r"\becb rate\b",
+        r"\bgdp growth rate\b",
 
-    r"\bboe interest rate\b",
-    r"\bboe rate\b",
-    r"\bboe minutes\b",
+        r"\bmanufacturing pmi\b",
+        r"\bservices pmi\b",
+        r"\bcomposite pmi\b",
 
-    r"\bboj interest rate\b",
-    r"\bboj rate\b",
-    r"\bboj monetary policy\b",
+        r"\bretail sales\b",
+    ],
 
-    r"\bsnb interest rate\b",
-    r"\bsnb rate\b",
-    r"\bsnb monetary policy\b",
+    "JPY": [
+        r"\bboj\b.*\brate\b",
+        r"\bbank of japan\b.*\brate\b",
+        r"\bboj monetary policy\b",
+        r"\bmonetary policy statement\b",
 
-    r"\bboc interest rate\b",
-    r"\bboc rate\b",
-    r"\bbank of canada interest rate\b",
+        r"\btokyo cpi\b",
+        r"\bnational cpi\b",
+        r"\bcpi\b",
+        r"\binflation rate\b",
 
-    r"\brba interest rate\b",
-    r"\brba rate\b",
-    r"\brba monetary policy\b",
+        r"\bgdp growth rate\b",
 
-    r"\brbnz interest rate\b",
-    r"\brbnz rate\b",
-    r"\brbnz monetary policy\b",
+        r"\bunemployment rate\b",
+    ],
 
-    # --------------------------------------------------------
-    # CPI / INFLATION
-    # --------------------------------------------------------
+    "CHF": [
+        r"\bsnb\b.*\brate\b",
+        r"\bswiss national bank\b.*\brate\b",
+        r"\bpolicy rate\b",
 
-    r"\bcpi\b",
-    r"\bconsumer price index\b",
-    r"\binflation rate\b",
-    r"\bcore inflation rate\b",
-    r"\bhicp\b",
+        r"\bcpi\b",
+        r"\binflation rate\b",
 
-    # --------------------------------------------------------
-    # LABOUR MARKET
-    # --------------------------------------------------------
+        r"\bgdp growth rate\b",
+        r"\bunemployment rate\b",
+    ],
 
-    r"\bunemployment rate\b",
-    r"\bemployment change\b",
-    r"\bunemployment change\b",
+    "CAD": [
+        r"\bboc\b.*\brate\b",
+        r"\bbank of canada\b.*\brate\b",
+        r"\bovernight rate\b",
+        r"\bmonetary policy report\b",
 
-    # UK claimant count is an important GBP release
-    r"\bclaimant count change\b",
+        r"\bcpi\b",
+        r"\binflation rate\b",
 
-    # Canada/Australia/NZ labour reports
-    r"\bemployment change\b",
-    r"\bfull time employment change\b",
-    r"\bparticipation rate\b",
+        r"\bemployment change\b",
+        r"\bunemployment rate\b",
 
-    # --------------------------------------------------------
-    # GDP — official growth releases only
-    # --------------------------------------------------------
+        r"\bgdp growth rate\b",
 
-    r"\bgdp growth rate\b",
-    r"\bgdp growth\b",
-    r"\bgross domestic product\b",
+        r"\bretail sales\b",
+    ],
 
-    # --------------------------------------------------------
-    # PMI — major headline PMIs only
-    # --------------------------------------------------------
+    "AUD": [
+        r"\brba\b.*\brate\b",
+        r"\breserve bank of australia\b.*\brate\b",
+        r"\bcash rate\b",
+        r"\bmonetary policy statement\b",
 
-    r"\bmanufacturing pmi\b",
-    r"\bservices pmi\b",
-    r"\bcomposite pmi\b",
+        r"\bcpi\b",
+        r"\binflation rate\b",
 
-    # --------------------------------------------------------
-    # RETAIL SALES
-    # --------------------------------------------------------
+        r"\bemployment change\b",
+        r"\bunemployment rate\b",
 
-    r"\bretail sales\b",
+        r"\bgdp growth rate\b",
 
-    # --------------------------------------------------------
-    # WAGES — selected major wage releases
-    # --------------------------------------------------------
+        r"\bretail sales\b",
+    ],
 
-    r"\baverage earnings\b",
-    r"\baverage weekly earnings\b",
-    r"\bwage price index\b",
-]
+    "NZD": [
+        r"\brbnz\b.*\brate\b",
+        r"\breserve bank of new zealand\b.*\brate\b",
+        r"\bofficial cash rate\b",
+        r"\bmonetary policy statement\b",
+
+        r"\bcpi\b",
+        r"\binflation rate\b",
+
+        r"\bemployment change\b",
+        r"\bunemployment rate\b",
+
+        r"\bgdp growth rate\b",
+    ],
+
+    "EUR": [
+        # ECB-related events if present in the national feeds
+        r"\becb\b.*\brate\b",
+        r"\beuropean central bank\b.*\brate\b",
+        r"\bdeposit facility rate\b",
+        r"\bmain refinancing rate\b",
+        r"\becb press conference\b",
+        r"\bmonetary policy statement\b",
+
+        # Major national inflation
+        r"\bcpi\b",
+        r"\binflation rate\b",
+        r"\bhicp\b",
+
+        # Major national GDP
+        r"\bgdp growth rate\b",
+
+        # Headline PMIs
+        r"\bmanufacturing pmi\b",
+        r"\bservices pmi\b",
+        r"\bcomposite pmi\b",
+
+        # Major labour data
+        r"\bunemployment rate\b",
+    ],
+}
 
 
-# These override the patterns above.
-# If one of these is found, the event is always rejected.
-EXCLUDE_PATTERNS = [
+# ============================================================
+# ALWAYS EXCLUDE THESE
+# ============================================================
 
-    # Forecasts / estimates
+EXCLUDE = [
     r"\bniesr\b",
     r"\bestimate\b",
     r"\bforecast\b",
 
-    # Speeches / appearances
     r"\bspeech\b",
     r"\bspeaks\b",
     r"\btestimony\b",
-    r"\bappearance\b",
 
-    # Secondary central-bank material
     r"\bmonthly report\b",
     r"\bbulletin\b",
 
-    # PMI sub-indices
+    r"\bconsumer confidence\b",
+    r"\bbusiness confidence\b",
+    r"\beconomic sentiment\b",
+
     r"\bpmi prices\b",
     r"\bpmi employment\b",
     r"\bpmi new orders\b",
     r"\bpmi output\b",
 
-    # GDP secondary details
     r"\bgdp deflator\b",
     r"\bgdp price index\b",
 
-    # Labour secondary indicators
-    r"\bemployment expectations\b",
-
-    # Surveys / confidence
-    r"\bconsumer confidence\b",
-    r"\bbusiness confidence\b",
-    r"\beconomic sentiment\b",
-
-    # Housing
-    r"\bhouse price\b",
-    r"\bhousing starts\b",
-    r"\bbuilding permits\b",
-    r"\bmortgage\b",
-    r"\bhome loans\b",
-
-    # Trade
-    r"\btrade balance\b",
-    r"\bcurrent account\b",
-    r"\bexports\b",
-    r"\bimports\b",
-
-    # Industrial / factory
-    r"\bindustrial production\b",
-    r"\bmanufacturing production\b",
-    r"\bfactory orders\b",
-
-    # Prices other than CPI
     r"\bproducer price\b",
     r"\bppi\b",
-    r"\bwholesale price\b",
 
-    # Money / credit
-    r"\bmoney supply\b",
-    r"\bcredit card\b",
-    r"\bprivate sector credit\b",
+    r"\btrade balance\b",
+    r"\bcurrent account\b",
 
-    # Auctions / government
+    r"\bindustrial production\b",
+    r"\bfactory orders\b",
+
+    r"\bhousing\b",
+    r"\bhouse price\b",
+    r"\bmortgage\b",
+
     r"\bbond auction\b",
     r"\bbill auction\b",
-    r"\bgovernment debt\b",
-    r"\bgovernment budget\b",
 
-    # Other low-priority releases
+    r"\bcredit card\b",
+    r"\bmoney supply\b",
+
+    r"\btourism\b",
+    r"\btourist\b",
+
     r"\bcar registration\b",
     r"\bvehicle sales\b",
-    r"\btourist\b",
-    r"\btourism\b",
 ]
 
 
-def normalize(text):
+# ============================================================
+# HELPERS
+# ============================================================
+
+def normalize(value):
     return re.sub(
         r"\s+",
         " ",
-        str(text or "").lower()
+        str(value or "").lower()
     ).strip()
 
 
-def is_important(name):
+def important_event(currency, name):
 
     text = normalize(name)
 
-    # Exclusion always wins.
-    for pattern in EXCLUDE_PATTERNS:
+    # Exclusions win
+    for pattern in EXCLUDE:
         if re.search(pattern, text):
             return False
 
-    for pattern in IMPORTANT_PATTERNS:
+    for pattern in PATTERNS.get(currency, []):
         if re.search(pattern, text):
             return True
 
     return False
 
 
-# ============================================================
-# DATE HANDLING
-# ============================================================
-
 def parse_datetime(value):
 
     value = str(value).strip()
 
-    # Current source format:
-    # MM/DD/YYYY HH:MM:SS
     try:
-        return datetime.strptime(
+        dt = datetime.strptime(
             value,
             "%m/%d/%Y %H:%M:%S"
-        ).replace(
+        )
+
+        # Temporary interpretation.
+        # We will verify source timezone before publishing.
+        return dt.replace(
             tzinfo=timezone.utc
         )
 
     except ValueError:
         pass
 
-    # ISO fallback
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
 
@@ -291,10 +279,6 @@ def parse_datetime(value):
     )
 
 
-# ============================================================
-# ICS
-# ============================================================
-
 def escape_ics(value):
 
     return (
@@ -305,10 +289,6 @@ def escape_ics(value):
         .replace("\n", "\\n")
     )
 
-
-# ============================================================
-# API
-# ============================================================
 
 def extract_events(data):
 
@@ -324,21 +304,47 @@ def extract_events(data):
             "items",
         ]:
 
-            if isinstance(
-                data.get(key),
-                list
-            ):
-                return data[key]
+            value = data.get(key)
+
+            if isinstance(value, list):
+                return value
 
     return []
 
 
-def fetch_country(
-    country,
-    currency,
-    start_date,
-    end_date,
-):
+# ============================================================
+# DATE RANGE
+# ============================================================
+
+now = datetime.now(
+    timezone.utc
+)
+
+today = now.replace(
+    hour=0,
+    minute=0,
+    second=0,
+    microsecond=0,
+)
+
+end = today + timedelta(
+    days=365
+)
+
+start_string = today.strftime(
+    "%Y-%m-%d"
+)
+
+end_string = end.strftime(
+    "%Y-%m-%d"
+)
+
+
+# ============================================================
+# FETCH
+# ============================================================
+
+def fetch_country(country, currency):
 
     print(
         f"Fetching {country} ({currency})..."
@@ -350,8 +356,8 @@ def fetch_country(
             "country": country,
             "impact": "HIGH",
             "type": "Release",
-            "start_date": start_date,
-            "end_date": end_date,
+            "start_date": start_string,
+            "end_date": end_string,
         },
         timeout=90,
     )
@@ -396,7 +402,10 @@ def fetch_country(
         if not name or not start:
             continue
 
-        if not is_important(name):
+        if not important_event(
+            currency,
+            name
+        ):
             continue
 
         try:
@@ -414,6 +423,7 @@ def fetch_country(
 
         accepted.append({
             "currency": currency,
+            "country": country,
             "name": str(name),
             "dt": dt,
         })
@@ -426,39 +436,6 @@ def fetch_country(
     return accepted
 
 
-# ============================================================
-# DATE WINDOW
-# ============================================================
-
-now = datetime.now(
-    timezone.utc
-)
-
-today = now.replace(
-    hour=0,
-    minute=0,
-    second=0,
-    microsecond=0,
-)
-
-# 12 months forward
-end = today + timedelta(
-    days=365
-)
-
-start_string = today.strftime(
-    "%Y-%m-%d"
-)
-
-end_string = end.strftime(
-    "%Y-%m-%d"
-)
-
-
-# ============================================================
-# FETCH
-# ============================================================
-
 events = []
 
 
@@ -467,21 +444,7 @@ for country, currency in COUNTRIES.items():
     events.extend(
         fetch_country(
             country,
-            currency,
-            start_string,
-            end_string,
-        )
-    )
-
-
-for country in EURO_COUNTRIES:
-
-    events.extend(
-        fetch_country(
-            country,
-            "EUR",
-            start_string,
-            end_string,
+            currency
         )
     )
 
@@ -509,19 +472,44 @@ events = list(
 )
 
 events.sort(
-    key=lambda x: x["dt"]
+    key=lambda event: event["dt"]
 )
 
 
 print("")
-print("============================")
+print("==========================")
 print("FINAL EVENTS:", len(events))
-print("============================")
+print("==========================")
 print("")
 
 
 # ============================================================
-# BUILD ICS
+# PRINT BREAKDOWN
+# ============================================================
+
+for currency in [
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+]:
+
+    count = sum(
+        1
+        for event in events
+        if event["currency"] == currency
+    )
+
+    print(
+        f"{currency}: {count}"
+    )
+
+
+# ============================================================
+# CREATE ICS
 # ============================================================
 
 dtstamp = now.strftime(
@@ -536,7 +524,7 @@ lines = [
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "X-WR-CALNAME:🌍 Global Forex — High Impact",
-    "X-WR-CALDESC:Major global forex events excluding USD",
+    "X-WR-CALDESC:Major forex market events excluding USD",
 ]
 
 
@@ -553,7 +541,7 @@ for event in events:
     )
 
     uid = hashlib.sha256(
-        uid_source.encode()
+        uid_source.encode("utf-8")
     ).hexdigest()[:24]
 
     lines.extend([
@@ -614,6 +602,7 @@ with open(
     )
 
 
+print("")
 print(
     "Calendar created with",
     len(events),
