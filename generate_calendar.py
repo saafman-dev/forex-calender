@@ -9,8 +9,6 @@ API = "https://economic-calendar-api-h9hr.onrender.com/events"
 # SETTINGS
 # ============================================================
 
-# USD deliberately excluded:
-# AIO Economic Calendar already covers USD.
 COUNTRIES = {
     "EUR": "EUR",
     "GBR": "GBP",
@@ -21,8 +19,8 @@ COUNTRIES = {
     "NZL": "NZD",
 }
 
-# We don't need unreliable events a year in advance.
-# GitHub refreshes this feed every 6 hours.
+# GitHub refreshes every 6 hours, so there is no reason
+# to rely on uncertain dates a year into the future.
 LOOKBACK_DAYS = 7
 LOOKAHEAD_DAYS = 60
 
@@ -56,20 +54,20 @@ def has_any(text, terms):
 
 
 # ============================================================
-# GENERIC EVENT TYPES
+# GENERIC DATA TYPES
 # ============================================================
 
 def is_cpi(text):
+
     if has_any(text, [
         "producer price",
         "ppi",
-        "inflation expectations",
         "inflation expectation",
     ]):
         return False
 
     return (
-        re.search(r"\bcpi\b", text) is not None
+        re.search(r"\bcpi\b", text)
         or "inflation rate" in text
         or "consumer price index" in text
         or "hicp" in text
@@ -79,22 +77,16 @@ def is_cpi(text):
 
 
 def is_gdp(text):
+
     if has_any(text, [
         "gdp deflator",
-        "gdp price",
+        "gdp price index",
         "gdp forecast",
-        "gdp estimate",
     ]):
         return False
 
-    if re.search(
-        r"\b(2nd|second|3rd|third)\s+(est|estimate)",
-        text
-    ):
-        return False
-
     return (
-        re.search(r"\bgdp\b", text) is not None
+        re.search(r"\bgdp\b", text)
         or "gross domestic product" in text
     )
 
@@ -114,12 +106,12 @@ def is_retail(text):
 
 
 # ============================================================
-# UNWANTED EVENTS
+# GENERAL EXCLUSIONS
 # ============================================================
 
 def globally_unwanted(text):
 
-    unwanted = [
+    return has_any(text, [
         "speech",
         "speaks",
         "testimony",
@@ -145,22 +137,11 @@ def globally_unwanted(text):
         "car registrations",
         "monthly report",
         "bulletin",
-    ]
-
-    return has_any(
-        text,
-        unwanted
-    )
+    ])
 
 
 # ============================================================
 # EVENT CLASSIFICATION
-#
-# Return:
-#
-#   (family, clean calendar title)
-#
-# or None when event should not be included.
 # ============================================================
 
 def classify_event(currency, name):
@@ -169,12 +150,12 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # EUR / ECB
+    # CENTRAL BANKS
     # ========================================================
 
+    # ECB
     if currency == "EUR":
 
-        # ECB press conference deserves its own alert.
         if (
             "ecb press conference" in text
             or (
@@ -187,7 +168,6 @@ def classify_event(currency, name):
                 "ECB Press Conference"
             )
 
-        # Merge all simultaneous ECB rate rows.
         if has_any(text, [
             "ecb interest rate decision",
             "ecb rate decision",
@@ -204,17 +184,9 @@ def classify_event(currency, name):
             )
 
 
-    # ========================================================
-    # GBP / BANK OF ENGLAND
-    # ========================================================
-
+    # Bank of England
     if currency == "GBP":
 
-        # Not important enough for this calendar.
-        if "hearings" in text:
-            return None
-
-        # Decision + minutes + MPR become ONE alert.
         if has_any(text, [
             "boe interest rate decision",
             "boe rate decision",
@@ -223,19 +195,20 @@ def classify_event(currency, name):
             "boe minutes",
             "boe monetary policy report",
         ]):
+
+            if "hearings" in text:
+                return None
+
             return (
                 "BOE_RATE",
                 "BoE Rate Decision"
             )
 
 
-    # ========================================================
-    # JPY / BANK OF JAPAN
-    # ========================================================
-
+    # Bank of Japan
     if currency == "JPY":
 
-        # Minutes weeks later are not top-tier.
+        # Minutes are released much later and aren't needed.
         if "minutes" in text:
             return None
 
@@ -248,7 +221,7 @@ def classify_event(currency, name):
         ]):
             return (
                 "BOJ_RATE",
-                "BoJ Rate Decision"
+                "BoJ Rate Decision — time approx."
             )
 
         if (
@@ -264,10 +237,7 @@ def classify_event(currency, name):
             )
 
 
-    # ========================================================
-    # CHF / SNB
-    # ========================================================
-
+    # SNB
     if currency == "CHF":
 
         if has_any(text, [
@@ -294,13 +264,9 @@ def classify_event(currency, name):
             )
 
 
-    # ========================================================
-    # CAD / BANK OF CANADA
-    # ========================================================
-
+    # Bank of Canada
     if currency == "CAD":
 
-        # Decision + MPR become ONE alert.
         if has_any(text, [
             "boc interest rate decision",
             "boc rate decision",
@@ -327,10 +293,7 @@ def classify_event(currency, name):
             )
 
 
-    # ========================================================
-    # AUD / RBA
-    # ========================================================
-
+    # RBA
     if currency == "AUD":
 
         if has_any(text, [
@@ -359,13 +322,9 @@ def classify_event(currency, name):
             )
 
 
-    # ========================================================
-    # NZD / RBNZ
-    # ========================================================
-
+    # RBNZ
     if currency == "NZD":
 
-        # Decision + MPS become ONE alert.
         if has_any(text, [
             "rbnz interest rate decision",
             "rbnz rate decision",
@@ -378,7 +337,6 @@ def classify_event(currency, name):
                 "RBNZ Rate Decision"
             )
 
-        # Avoid matching unrelated words containing "ocr".
         if re.search(
             r"\bocr\b",
             text
@@ -402,7 +360,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # DROP GENERIC LOW-PRIORITY MATERIAL
+    # OTHER LOW-PRIORITY DATA
     # ========================================================
 
     if globally_unwanted(text):
@@ -410,7 +368,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # EUR MACRO
+    # EUR
     # ========================================================
 
     if currency == "EUR":
@@ -418,28 +376,26 @@ def classify_event(currency, name):
         if is_cpi(text):
             return (
                 "EUR_CPI",
-                "Eurozone CPI"
+                "Eurozone Flash CPI"
             )
 
         if is_gdp(text):
             return (
                 "EUR_GDP",
-                "Eurozone GDP"
+                "Eurozone Flash GDP"
             )
 
-        # Manufacturing / services / composite at same time
-        # will be collapsed to one PMI event.
         if is_pmi(text):
             return (
                 "EUR_PMI",
-                "Eurozone PMI"
+                "Eurozone Flash PMI"
             )
 
         return None
 
 
     # ========================================================
-    # GBP MACRO
+    # GBP
     # ========================================================
 
     if currency == "GBP":
@@ -465,13 +421,13 @@ def classify_event(currency, name):
         if is_gdp(text):
             return (
                 "GBP_GDP",
-                "UK GDP"
+                "UK GDP First Estimate"
             )
 
         if is_pmi(text):
             return (
                 "GBP_PMI",
-                "UK PMI"
+                "UK Flash PMI"
             )
 
         if is_retail(text):
@@ -484,7 +440,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # JPY MACRO
+    # JPY
     # ========================================================
 
     if currency == "JPY":
@@ -497,15 +453,10 @@ def classify_event(currency, name):
                     "Tokyo CPI"
                 )
 
-            if (
-                "national" in text
-                or "japan" in text
-                or "cpi" in text
-            ):
-                return (
-                    "JPY_CPI",
-                    "Japan CPI"
-                )
+            return (
+                "JPY_CPI",
+                "Japan CPI"
+            )
 
         if is_gdp(text):
             return (
@@ -517,7 +468,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # CHF MACRO
+    # CHF
     # ========================================================
 
     if currency == "CHF":
@@ -538,7 +489,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # CAD MACRO
+    # CAD
     # ========================================================
 
     if currency == "CAD":
@@ -574,7 +525,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # AUD MACRO
+    # AUD
     # ========================================================
 
     if currency == "AUD":
@@ -604,7 +555,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # NZD MACRO
+    # NZD
     # ========================================================
 
     if currency == "NZD":
@@ -637,19 +588,17 @@ def classify_event(currency, name):
 
 
 # ============================================================
-# SOURCE DATE PARSING
+# DATE PARSING
 #
-# Near-term central-bank dates have been cross-checked against
-# official schedules. Source timestamps are UTC.
+# Source timestamps are UTC.
 # ============================================================
 
 def parse_datetime(value):
 
     value = str(value).strip()
 
-    # Source format:
-    # MM/DD/YYYY HH:MM:SS
     try:
+
         dt = datetime.strptime(
             value,
             "%m/%d/%Y %H:%M:%S"
@@ -662,9 +611,11 @@ def parse_datetime(value):
     except ValueError:
         pass
 
-    # ISO fallback
     if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
+        value = (
+            value[:-1]
+            + "+00:00"
+        )
 
     dt = datetime.fromisoformat(
         value
@@ -681,7 +632,7 @@ def parse_datetime(value):
 
 
 # ============================================================
-# API HELPERS
+# API / ICS HELPERS
 # ============================================================
 
 def extract_events(data):
@@ -697,6 +648,7 @@ def extract_events(data):
             "results",
             "items",
         ]:
+
             value = data.get(key)
 
             if isinstance(
@@ -707,10 +659,6 @@ def extract_events(data):
 
     return []
 
-
-# ============================================================
-# ICS HELPERS
-# ============================================================
 
 def escape_ics(value):
 
@@ -725,21 +673,16 @@ def escape_ics(value):
     )
 
 
-# RFC 5545 recommends lines no longer than 75 octets.
 def fold_ics_line(line):
 
     result = []
 
     current = ""
-    first_line = True
+    first = True
 
     for char in line:
 
-        limit = (
-            75
-            if first_line
-            else 74
-        )
+        limit = 75 if first else 74
 
         candidate = (
             current + char
@@ -748,18 +691,22 @@ def fold_ics_line(line):
         if (
             current
             and len(
-                candidate.encode("utf-8")
+                candidate.encode(
+                    "utf-8"
+                )
             ) > limit
         ):
 
-            if first_line:
+            if first:
+
                 result.append(
                     current
                 )
 
-                first_line = False
+                first = False
 
             else:
+
                 result.append(
                     " " + current
                 )
@@ -771,7 +718,7 @@ def fold_ics_line(line):
 
     if current:
 
-        if first_line:
+        if first:
             result.append(
                 current
             )
@@ -787,12 +734,14 @@ def fold_ics_line(line):
 def add_ics_line(lines, line):
 
     lines.extend(
-        fold_ics_line(line)
+        fold_ics_line(
+            line
+        )
     )
 
 
 # ============================================================
-# ROLLING DATE WINDOW
+# DATE WINDOW
 # ============================================================
 
 now = datetime.now(
@@ -850,7 +799,7 @@ print(
 
 
 # ============================================================
-# FETCH RAW EVENTS
+# FETCH
 # ============================================================
 
 def fetch_country(
@@ -886,9 +835,10 @@ def fetch_country(
     )
 
     if not rows:
+
         raise RuntimeError(
             f"{country} returned zero rows. "
-            "Refusing to publish an incomplete calendar."
+            "Calendar update stopped."
         )
 
     print(
@@ -937,11 +887,12 @@ def fetch_country(
         if not classification:
             continue
 
-        family, clean_title = (
+        family, title = (
             classification
         )
 
         try:
+
             dt = parse_datetime(
                 start
             )
@@ -956,7 +907,6 @@ def fetch_country(
 
             continue
 
-        # Protect against the API ignoring date parameters.
         if not (
             range_start
             <= dt
@@ -964,24 +914,17 @@ def fetch_country(
         ):
             continue
 
-        source_id = (
-            row.get("Id")
-            or row.get("id")
-            or ""
-        )
-
         accepted.append({
             "country": country,
             "currency": currency,
             "family": family,
-            "title": clean_title,
+            "title": title,
             "source_name": str(name),
-            "source_id": str(source_id),
             "dt": dt,
         })
 
     print(
-        "Accepted raw events:",
+        "Accepted raw:",
         len(accepted)
     )
 
@@ -1001,22 +944,14 @@ for country, currency in COUNTRIES.items():
 
 
 # ============================================================
-# MERGE SIMULTANEOUS DUPLICATES
+# MERGE SAME-TIME RELEASES
 #
-# Examples:
-#
-# BoE Rate Decision + Minutes + MPR
-#   -> ONE BoE Rate Decision event
-#
-# CPI MoM + CPI YoY + Core CPI
-#   -> ONE CPI event
-#
-# Manufacturing + Services PMI
-#   -> ONE PMI event
+# CPI YoY + MoM + Core -> one CPI alert.
+# PMI Manufacturing + Services -> one PMI alert.
+# BoE decision + minutes + MPR -> one alert.
 # ============================================================
 
 groups = {}
-
 
 for event in raw_events:
 
@@ -1034,7 +969,6 @@ for event in raw_events:
             "title": event["title"],
             "dt": event["dt"],
             "source_names": set(),
-            "source_ids": set(),
         }
 
     groups[key][
@@ -1043,18 +977,223 @@ for event in raw_events:
         event["source_name"]
     )
 
-    if event["source_id"]:
-
-        groups[key][
-            "source_ids"
-        ].add(
-            event["source_id"]
-        )
-
 
 events = list(
     groups.values()
 )
+
+
+# ============================================================
+# REMOVE SECONDARY / FINAL RELEASES
+# ============================================================
+
+def should_keep(event):
+
+    family = event["family"]
+    dt = event["dt"]
+
+    text = normalize(
+        " | ".join(
+            sorted(
+                event[
+                    "source_names"
+                ]
+            )
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # EUR FLASH PMI ONLY
+    #
+    # Flash is normally around the 20th-24th.
+    # Final Manufacturing/Services releases are around 1st-5th.
+    # --------------------------------------------------------
+
+    if family == "EUR_PMI":
+
+        if has_any(text, [
+            "final",
+            "revised",
+        ]):
+            return False
+
+        return dt.day >= 15
+
+
+    # --------------------------------------------------------
+    # UK FLASH PMI ONLY
+    # --------------------------------------------------------
+
+    if family == "GBP_PMI":
+
+        if has_any(text, [
+            "final",
+            "revised",
+        ]):
+            return False
+
+        return dt.day >= 15
+
+
+    # --------------------------------------------------------
+    # EUROZONE FLASH CPI ONLY
+    #
+    # Flash CPI is normally near the end/start of month.
+    # Final HICP is normally around the middle of the month.
+    # --------------------------------------------------------
+
+    if family == "EUR_CPI":
+
+        if (
+            "final" in text
+            and not has_any(
+                text,
+                [
+                    "flash",
+                    "preliminary",
+                ]
+            )
+        ):
+            return False
+
+        return (
+            dt.day <= 10
+            or dt.day >= 25
+        )
+
+
+    # --------------------------------------------------------
+    # EUROZONE PRELIMINARY FLASH GDP ONLY
+    # --------------------------------------------------------
+
+    if family == "EUR_GDP":
+
+        if has_any(text, [
+            "second estimate",
+            "2nd estimate",
+            "third estimate",
+            "3rd estimate",
+            "final",
+            "revised",
+        ]):
+            return False
+
+        if has_any(text, [
+            "preliminary flash",
+            "flash estimate",
+            "preliminary estimate",
+        ]):
+            return True
+
+        # Safe fallback for Eurostat's end-of-month
+        # preliminary GDP schedule.
+        return (
+            dt.day >= 25
+            or dt.day <= 5
+        )
+
+
+    # --------------------------------------------------------
+    # UK GDP:
+    # ONLY FIRST QUARTERLY ESTIMATE.
+    #
+    # Drop monthly GDP and later quarterly national accounts.
+    # --------------------------------------------------------
+
+    if family == "GBP_GDP":
+
+        return has_any(text, [
+            "first quarterly estimate",
+            "gdp first quarterly estimate",
+            "preliminary estimate",
+        ])
+
+
+    return True
+
+
+events = [
+    event
+    for event in events
+    if should_keep(
+        event
+    )
+]
+
+
+# ============================================================
+# REMOVE NEARBY DUPLICATES FROM DIFFERENT PROVIDERS
+# ============================================================
+
+def remove_nearby_duplicates(
+    events,
+    currency,
+    family,
+    hours
+):
+
+    matches = sorted(
+        [
+            event
+            for event in events
+            if (
+                event["currency"]
+                == currency
+                and event["family"]
+                == family
+            )
+        ],
+        key=lambda x: x["dt"]
+    )
+
+    remove_ids = set()
+
+    last_kept = None
+
+    for event in matches:
+
+        if last_kept is None:
+
+            last_kept = event
+            continue
+
+        difference = (
+            event["dt"]
+            - last_kept["dt"]
+        ).total_seconds() / 3600
+
+        if difference <= hours:
+
+            remove_ids.add(
+                id(event)
+            )
+
+        else:
+
+            last_kept = event
+
+    return [
+        event
+        for event in events
+        if id(event)
+        not in remove_ids
+    ]
+
+
+# Occasionally the EUR feed has the same flash CPI
+# from two providers a day apart.
+events = remove_nearby_duplicates(
+    events,
+    "EUR",
+    "EUR_CPI",
+    72,
+)
+
+
+# ============================================================
+# SORT
+# ============================================================
 
 events.sort(
     key=lambda event:
@@ -1063,17 +1202,19 @@ events.sort(
 
 
 # ============================================================
-# OUTPUT CHECKS
+# RESULTS
 # ============================================================
 
 print("")
 print(
     "=============================="
 )
+
 print(
-    "FINAL MERGED EVENTS:",
+    "FINAL CLEAN EVENTS:",
     len(events)
 )
+
 print(
     "=============================="
 )
@@ -1115,16 +1256,18 @@ for currency in [
 
 
 # ============================================================
-# CENTRAL BANK SANITY CHECK
+# CENTRAL BANK CHECK
 # ============================================================
 
 print("")
 print(
     "=============================="
 )
+
 print(
     "CENTRAL BANK CHECK"
 )
+
 print(
     "=============================="
 )
@@ -1181,53 +1324,26 @@ dtstamp = now.strftime(
     "%Y%m%dT%H%M%SZ"
 )
 
-
 lines = []
 
-add_ics_line(
-    lines,
-    "BEGIN:VCALENDAR"
-)
 
-add_ics_line(
-    lines,
-    "VERSION:2.0"
-)
+for line in [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//saafman-dev//Global Forex High Impact//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "X-WR-CALNAME:🌍 Global Forex — High Impact",
+    "X-WR-CALDESC:Major global forex events excluding USD",
+    "X-WR-TIMEZONE:UTC",
+    "REFRESH-INTERVAL;VALUE=DURATION:PT6H",
+    "X-PUBLISHED-TTL:PT6H",
+]:
 
-add_ics_line(
-    lines,
-    "PRODID:-//saafman-dev//Global Forex High Impact//EN"
-)
-
-add_ics_line(
-    lines,
-    "CALSCALE:GREGORIAN"
-)
-
-add_ics_line(
-    lines,
-    "METHOD:PUBLISH"
-)
-
-add_ics_line(
-    lines,
-    "X-WR-CALNAME:🌍 Global Forex — High Impact"
-)
-
-add_ics_line(
-    lines,
-    "X-WR-CALDESC:Major forex market events excluding USD"
-)
-
-add_ics_line(
-    lines,
-    "REFRESH-INTERVAL;VALUE=DURATION:PT6H"
-)
-
-add_ics_line(
-    lines,
-    "X-PUBLISHED-TTL:PT6H"
-)
+    add_ics_line(
+        lines,
+        line
+    )
 
 
 for event in events:
@@ -1238,26 +1354,15 @@ for event in events:
         "%Y%m%dT%H%M%SZ"
     )
 
-    # Prefer a stable source ID.
-    ids = sorted(
-        event["source_ids"]
+
+    # Stable UID:
+    # if the event's time changes but stays on the same date,
+    # Apple updates the existing event instead of creating another.
+    uid_seed = (
+        f"{event['currency']}|"
+        f"{event['family']}|"
+        f"{event['dt'].date().isoformat()}"
     )
-
-    if ids:
-
-        uid_seed = (
-            f"{event['currency']}|"
-            f"{event['family']}|"
-            f"{ids[0]}"
-        )
-
-    else:
-
-        uid_seed = (
-            f"{event['currency']}|"
-            f"{event['family']}|"
-            f"{event['dt'].isoformat()}"
-        )
 
     uid_hash = hashlib.sha256(
         uid_seed.encode(
@@ -1266,18 +1371,20 @@ for event in events:
     ).hexdigest()[:24]
 
     uid = (
-        f"{uid_hash}"
-        "@saafman-dev.github.io"
+        uid_hash
+        + "@saafman-dev.github.io"
     )
 
 
     source_names = sorted(
-        event["source_names"]
+        event[
+            "source_names"
+        ]
     )
 
     description = (
         "Major market event. "
-        "Underlying releases: "
+        "Underlying release(s): "
         + "; ".join(
             source_names
         )
@@ -1309,7 +1416,6 @@ for event in events:
         f"DTSTART:{start}"
     )
 
-    # Small visible duration in Apple Calendar.
     add_ics_line(
         lines,
         "DURATION:PT5M"
@@ -1402,11 +1508,13 @@ print("")
 print(
     "=============================="
 )
+
 print(
     "Calendar created with",
     len(events),
-    "merged events."
+    "clean events."
 )
+
 print(
     "=============================="
 )
