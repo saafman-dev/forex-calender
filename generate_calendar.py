@@ -19,8 +19,6 @@ COUNTRIES = {
     "NZL": "NZD",
 }
 
-# GitHub refreshes every 6 hours, so there is no reason
-# to rely on uncertain dates a year into the future.
 LOOKBACK_DAYS = 7
 LOOKAHEAD_DAYS = 60
 
@@ -66,7 +64,7 @@ def is_cpi(text):
     ]):
         return False
 
-    return (
+    return bool(
         re.search(r"\bcpi\b", text)
         or "inflation rate" in text
         or "consumer price index" in text
@@ -85,7 +83,7 @@ def is_gdp(text):
     ]):
         return False
 
-    return (
+    return bool(
         re.search(r"\bgdp\b", text)
         or "gross domestic product" in text
     )
@@ -150,10 +148,9 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # CENTRAL BANKS
+    # ECB
     # ========================================================
 
-    # ECB
     if currency == "EUR":
 
         if (
@@ -184,7 +181,10 @@ def classify_event(currency, name):
             )
 
 
-    # Bank of England
+    # ========================================================
+    # BANK OF ENGLAND
+    # ========================================================
+
     if currency == "GBP":
 
         if has_any(text, [
@@ -205,10 +205,12 @@ def classify_event(currency, name):
             )
 
 
-    # Bank of Japan
+    # ========================================================
+    # BANK OF JAPAN
+    # ========================================================
+
     if currency == "JPY":
 
-        # Minutes are released much later and aren't needed.
         if "minutes" in text:
             return None
 
@@ -237,7 +239,10 @@ def classify_event(currency, name):
             )
 
 
+    # ========================================================
     # SNB
+    # ========================================================
+
     if currency == "CHF":
 
         if has_any(text, [
@@ -264,7 +269,10 @@ def classify_event(currency, name):
             )
 
 
-    # Bank of Canada
+    # ========================================================
+    # BANK OF CANADA
+    # ========================================================
+
     if currency == "CAD":
 
         if has_any(text, [
@@ -293,7 +301,10 @@ def classify_event(currency, name):
             )
 
 
+    # ========================================================
     # RBA
+    # ========================================================
+
     if currency == "AUD":
 
         if has_any(text, [
@@ -322,7 +333,10 @@ def classify_event(currency, name):
             )
 
 
+    # ========================================================
     # RBNZ
+    # ========================================================
+
     if currency == "NZD":
 
         if has_any(text, [
@@ -360,7 +374,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # OTHER LOW-PRIORITY DATA
+    # REMOVE LOW-PRIORITY DATA
     # ========================================================
 
     if globally_unwanted(text):
@@ -368,7 +382,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # EUR
+    # EUR MACRO
     # ========================================================
 
     if currency == "EUR":
@@ -395,7 +409,7 @@ def classify_event(currency, name):
 
 
     # ========================================================
-    # GBP
+    # GBP MACRO
     # ========================================================
 
     if currency == "GBP":
@@ -418,6 +432,9 @@ def classify_event(currency, name):
                 "UK Labour Market"
             )
 
+        # IMPORTANT:
+        # Accept all potentially relevant UK GDP rows here.
+        # Later we select ONE proper quarterly GDP release.
         if is_gdp(text):
             return (
                 "GBP_GDP",
@@ -589,8 +606,7 @@ def classify_event(currency, name):
 
 # ============================================================
 # DATE PARSING
-#
-# Source timestamps are UTC.
+# SOURCE TIMES ARE UTC
 # ============================================================
 
 def parse_datetime(value):
@@ -598,7 +614,6 @@ def parse_datetime(value):
     value = str(value).strip()
 
     try:
-
         dt = datetime.strptime(
             value,
             "%m/%d/%Y %H:%M:%S"
@@ -682,7 +697,11 @@ def fold_ics_line(line):
 
     for char in line:
 
-        limit = 75 if first else 74
+        limit = (
+            75
+            if first
+            else 74
+        )
 
         candidate = (
             current + char
@@ -698,15 +717,12 @@ def fold_ics_line(line):
         ):
 
             if first:
-
                 result.append(
                     current
                 )
-
                 first = False
 
             else:
-
                 result.append(
                     " " + current
                 )
@@ -892,7 +908,6 @@ def fetch_country(
         )
 
         try:
-
             dt = parse_datetime(
                 start
             )
@@ -904,7 +919,6 @@ def fetch_country(
                 start,
                 error
             )
-
             continue
 
         if not (
@@ -945,10 +959,6 @@ for country, currency in COUNTRIES.items():
 
 # ============================================================
 # MERGE SAME-TIME RELEASES
-#
-# CPI YoY + MoM + Core -> one CPI alert.
-# PMI Manufacturing + Services -> one PMI alert.
-# BoE decision + minutes + MPR -> one alert.
 # ============================================================
 
 groups = {}
@@ -1005,9 +1015,6 @@ def should_keep(event):
 
     # --------------------------------------------------------
     # EUR FLASH PMI ONLY
-    #
-    # Flash is normally around the 20th-24th.
-    # Final Manufacturing/Services releases are around 1st-5th.
     # --------------------------------------------------------
 
     if family == "EUR_PMI":
@@ -1038,9 +1045,6 @@ def should_keep(event):
 
     # --------------------------------------------------------
     # EUROZONE FLASH CPI ONLY
-    #
-    # Flash CPI is normally near the end/start of month.
-    # Final HICP is normally around the middle of the month.
     # --------------------------------------------------------
 
     if family == "EUR_CPI":
@@ -1064,7 +1068,7 @@ def should_keep(event):
 
 
     # --------------------------------------------------------
-    # EUROZONE PRELIMINARY FLASH GDP ONLY
+    # EUROZONE FLASH GDP
     # --------------------------------------------------------
 
     if family == "EUR_GDP":
@@ -1086,28 +1090,15 @@ def should_keep(event):
         ]):
             return True
 
-        # Safe fallback for Eurostat's end-of-month
-        # preliminary GDP schedule.
         return (
             dt.day >= 25
             or dt.day <= 5
         )
 
 
-    # --------------------------------------------------------
-    # UK GDP:
-    # ONLY FIRST QUARTERLY ESTIMATE.
-    #
-    # Drop monthly GDP and later quarterly national accounts.
-    # --------------------------------------------------------
-
+    # UK GDP is selected separately below.
     if family == "GBP_GDP":
-
-        return has_any(text, [
-            "first quarterly estimate",
-            "gdp first quarterly estimate",
-            "preliminary estimate",
-        ])
+        return True
 
 
     return True
@@ -1123,7 +1114,201 @@ events = [
 
 
 # ============================================================
-# REMOVE NEARBY DUPLICATES FROM DIFFERENT PROVIDERS
+# UK GDP — KEEP ONE FIRST QUARTERLY ESTIMATE
+#
+# ONS first quarterly estimates are normally released in:
+#
+# February  -> Q4 previous year
+# May       -> Q1
+# August    -> Q2
+# November  -> Q3
+#
+# We choose one event in each of these months.
+# Quarterly/QoQ wording is strongly preferred.
+# Monthly/revised wording is penalised.
+# ============================================================
+
+def choose_uk_quarterly_gdp(events):
+
+    normal_events = [
+        event
+        for event in events
+        if event["family"]
+        != "GBP_GDP"
+    ]
+
+    gdp_events = [
+        event
+        for event in events
+        if event["family"]
+        == "GBP_GDP"
+    ]
+
+    candidates_by_month = {}
+
+    for event in gdp_events:
+
+        dt = event["dt"]
+
+        # First estimates normally fall in these months.
+        if dt.month not in {
+            2,
+            5,
+            8,
+            11,
+        }:
+            continue
+
+        # They normally arrive during the first half
+        # of the month. This also removes later revisions.
+        if dt.day > 20:
+            continue
+
+        text = normalize(
+            " | ".join(
+                sorted(
+                    event[
+                        "source_names"
+                    ]
+                )
+            )
+        )
+
+        # Definitely later/revised quarterly publications.
+        if has_any(text, [
+            "quarterly national accounts",
+            "second estimate",
+            "2nd estimate",
+            "third estimate",
+            "3rd estimate",
+            "final estimate",
+            "revised",
+        ]):
+            continue
+
+        score = 0
+
+        # Strong signs this is the quarterly first estimate.
+        if has_any(text, [
+            "first quarterly estimate",
+            "first estimate",
+            "preliminary estimate",
+            "preliminary",
+        ]):
+            score += 100
+
+        if has_any(text, [
+            "qoq",
+            "(qoq)",
+            "quarter-on-quarter",
+            "quarterly",
+        ]):
+            score += 80
+
+        # Generic "GDP Growth Rate" is usually the quarterly
+        # macro-calendar series.
+        if "gdp growth rate" in text:
+            score += 40
+
+        # Monthly GDP is less desirable, but don't instantly
+        # reject it because ONS can publish monthly GDP at the
+        # exact same time as the quarterly first estimate.
+        if has_any(text, [
+            "monthly",
+            "(mom)",
+            " mom",
+            "month-on-month",
+        ]):
+            score -= 50
+
+        key = (
+            dt.year,
+            dt.month,
+        )
+
+        candidate = {
+            "event": event,
+            "score": score,
+        }
+
+        if key not in candidates_by_month:
+
+            candidates_by_month[
+                key
+            ] = candidate
+
+        else:
+
+            current = (
+                candidates_by_month[
+                    key
+                ]
+            )
+
+            # Higher score wins.
+            # On equal scores, the earliest release wins.
+            if (
+                score
+                > current["score"]
+                or (
+                    score
+                    == current["score"]
+                    and dt
+                    < current[
+                        "event"
+                    ]["dt"]
+                )
+            ):
+                candidates_by_month[
+                    key
+                ] = candidate
+
+
+    chosen = [
+        value["event"]
+        for value
+        in candidates_by_month.values()
+    ]
+
+    # Helpful debugging output
+    print("")
+    print(
+        "UK QUARTERLY GDP SELECTION"
+    )
+
+    for event in sorted(
+        chosen,
+        key=lambda x: x["dt"]
+    ):
+
+        print(
+            " ",
+            event["dt"].strftime(
+                "%Y-%m-%d %H:%M UTC"
+            ),
+            "-",
+            " | ".join(
+                sorted(
+                    event[
+                        "source_names"
+                    ]
+                )
+            )
+        )
+
+    return (
+        normal_events
+        + chosen
+    )
+
+
+events = choose_uk_quarterly_gdp(
+    events
+)
+
+
+# ============================================================
+# REMOVE NEARBY EUR CPI DUPLICATES
 # ============================================================
 
 def remove_nearby_duplicates(
@@ -1148,7 +1333,6 @@ def remove_nearby_duplicates(
     )
 
     remove_ids = set()
-
     last_kept = None
 
     for event in matches:
@@ -1170,7 +1354,6 @@ def remove_nearby_duplicates(
             )
 
         else:
-
             last_kept = event
 
     return [
@@ -1181,8 +1364,6 @@ def remove_nearby_duplicates(
     ]
 
 
-# Occasionally the EUR feed has the same flash CPI
-# from two providers a day apart.
 events = remove_nearby_duplicates(
     events,
     "EUR",
@@ -1355,9 +1536,6 @@ for event in events:
     )
 
 
-    # Stable UID:
-    # if the event's time changes but stays on the same date,
-    # Apple updates the existing event instead of creating another.
     uid_seed = (
         f"{event['currency']}|"
         f"{event['family']}|"
