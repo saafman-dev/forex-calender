@@ -1,17 +1,18 @@
 import requests
 import hashlib
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 API = "https://economic-calendar-api-h9hr.onrender.com/events"
 
 # ============================================================
-# COUNTRIES
-# USD excluded because AIO already covers USD.
+# SETTINGS
 # ============================================================
 
+# USD deliberately excluded:
+# AIO Economic Calendar already covers USD.
 COUNTRIES = {
-    "DEU": "EUR",
+    "EUR": "EUR",
     "GBR": "GBP",
     "JPN": "JPY",
     "CHE": "CHF",
@@ -20,375 +21,668 @@ COUNTRIES = {
     "NZL": "NZD",
 }
 
+# We don't need unreliable events a year in advance.
+# GitHub refreshes this feed every 6 hours.
+LOOKBACK_DAYS = 7
+LOOKAHEAD_DAYS = 60
+
 
 # ============================================================
-# HELPERS
+# TEXT HELPERS
 # ============================================================
 
 def normalize(value):
+    text = str(value or "").lower()
+
+    text = (
+        text
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("’", "'")
+    )
+
     return re.sub(
         r"\s+",
         " ",
-        str(value or "").lower()
+        text
     ).strip()
 
 
-def contains(text, patterns):
-    text = normalize(text)
-
+def has_any(text, terms):
     return any(
-        re.search(pattern, text)
-        for pattern in patterns
+        term in text
+        for term in terms
     )
 
 
 # ============================================================
-# FILTERS
+# GENERIC EVENT TYPES
 # ============================================================
 
-def important_eur(name):
-
-    text = normalize(name)
-
-    # Remove German state/regional releases
-    REGIONS = [
-        "baden-wurttemberg",
-        "baden-württemberg",
-        "bavaria",
-        "brandenburg",
-        "hesse",
-        "north rhine-westphalia",
-        "saxony",
-    ]
-
-    if any(region in text for region in REGIONS):
-        return False
-
-    # No Composite PMI — Manufacturing + Services are enough
-    if "composite pmi" in text:
-        return False
-
-    return contains(text, [
-        r"\bgerman cpi\b",
-        r"^cpi \(mom\)$",
-        r"^cpi \(yoy\)$",
-        r"\binflation rate\b",
-
-        r"\bhcob manufacturing pmi\b",
-        r"\bhcob services pmi\b",
-
-        r"\bunemployment change\b",
-        r"\bunemployment rate\b",
-
-        r"\bgdp growth rate\b",
-
-        # ECB, if present in German feed
-        r"\becb.*interest rate\b",
-        r"\becb.*rate decision\b",
-        r"\bdeposit facility rate\b",
-        r"\bmain refinancing rate\b",
-        r"\becb press conference\b",
-    ])
-
-
-def important_gbp(name):
-
-    text = normalize(name)
-
-    # Secondary/duplicate UK releases
-    if contains(text, [
-        r"\bbrc\b",
-        r"\bilo unemployment\b",
-        r"\bretail sales ex-fuel\b",
-        r"\bniesr\b",
-        r"\bcomposite pmi\b",
+def is_cpi(text):
+    if has_any(text, [
+        "producer price",
+        "ppi",
+        "inflation expectations",
+        "inflation expectation",
     ]):
         return False
 
-    return contains(text, [
-
-        # BoE
-        r"\bofficial bank rate\b",
-        r"\bboe interest rate\b",
-        r"\bboe rate decision\b",
-        r"\bboe minutes\b",
-        r"\bmonetary policy report\b",
-
-        # Inflation
-        r"\bcpi \(mom\)\b",
-        r"\bcpi \(yoy\)\b",
-        r"\binflation rate\b",
-
-        # Labour
-        r"\bclaimant count change\b",
-        r"\bemployment change\b",
-        r"\bunemployment rate\b",
-
-        # Keep one headline earnings measure
-        r"\baverage earnings including bonus\b",
-
-        # GDP
-        r"\bgdp growth rate\b",
-
-        # PMI
-        r"\bs&p global manufacturing pmi\b",
-        r"\bs&p global services pmi\b",
-
-        # Retail
-        r"^retail sales \(mom\)$",
-    ])
+    return (
+        re.search(r"\bcpi\b", text) is not None
+        or "inflation rate" in text
+        or "consumer price index" in text
+        or "hicp" in text
+        or "harmonised index of consumer prices" in text
+        or "harmonized index of consumer prices" in text
+    )
 
 
-def important_jpy(name):
-
-    text = normalize(name)
-
-    # Keep core CPI variants, not every CPI variant
-    return contains(text, [
-
-        # BoJ
-        r"\bboj interest rate decision\b",
-        r"\bbank of japan interest rate\b",
-        r"\bboj monetary policy\b",
-
-        # CPI
-        r"\bnational cpi ex food, energy\b",
-        r"\bnational cpi ex fresh food\b",
-        r"\btokyo cpi ex fresh food\b",
-
-        # GDP
-        r"\bgdp growth rate\b",
-
-        # Labour
-        r"^unemployment rate$",
-    ])
-
-
-def important_chf(name):
-
-    return contains(name, [
-
-        # SNB
-        r"\bsnb interest rate decision\b",
-        r"\bsnb policy rate\b",
-        r"\bswiss national bank.*rate\b",
-
-        # CPI
-        r"\bcpi \(mom\)\b",
-        r"\bcpi \(yoy\)\b",
-        r"\binflation rate\b",
-
-        # GDP
-        r"\bgdp growth rate\b",
-
-        # Labour
-        r"\bunemployment rate\b",
-    ])
-
-
-def important_cad(name):
-
-    text = normalize(name)
-
-    # Remove secondary retail variant
-    if "retail sales ex autos" in text:
+def is_gdp(text):
+    if has_any(text, [
+        "gdp deflator",
+        "gdp price",
+        "gdp forecast",
+        "gdp estimate",
+    ]):
         return False
 
-    return contains(text, [
-
-        # BoC
-        r"\bboc interest rate decision\b",
-        r"\bboc rate decision\b",
-        r"\bbank of canada.*interest rate\b",
-        r"\bovernight rate\b",
-        r"\bboc monetary policy report\b",
-
-        # Inflation
-        r"\bcpi \(mom\)\b",
-        r"\bcpi \(yoy\)\b",
-        r"\btrimmed mean cpi\b",
-        r"\bmedian cpi\b",
-
-        # Labour
-        r"\bemployment change\b",
-        r"^unemployment rate$",
-
-        # GDP
-        r"\bgdp growth rate\b",
-
-        # Retail
-        r"^retail sales \(mom\)$",
-    ])
-
-
-def important_aud(name):
-
-    text = normalize(name)
-
-    # We want quarterly trimmed mean, not monthly duplicates
-    if (
-        "trimmed mean cpi" in text
-        and "quarterly" not in text
+    if re.search(
+        r"\b(2nd|second|3rd|third)\s+(est|estimate)",
+        text
     ):
         return False
 
-    return contains(text, [
+    return (
+        re.search(r"\bgdp\b", text) is not None
+        or "gross domestic product" in text
+    )
 
-        # RBA
-        r"\brba interest rate decision\b",
-        r"\brba rate decision\b",
-        r"\brba cash rate\b",
-        r"\bcash rate target\b",
-        r"\breserve bank of australia.*rate\b",
-        r"\bmonetary policy decision\b",
 
-        # Inflation
-        r"\bquarterly.*trimmed mean cpi\b",
-        r"\bcpi \(qoq\)\b",
-        r"\bcpi \(yoy\)\b",
-
-        # Labour
-        r"\bemployment change\b",
-        r"\bunemployment rate\b",
-
-        # GDP
-        r"\bgdp growth rate\b",
-
-        # Retail
-        r"^retail sales \(mom\)$",
+def is_pmi(text):
+    return has_any(text, [
+        "manufacturing pmi",
+        "services pmi",
+        "composite pmi",
     ])
 
 
-def important_nzd(name):
-
-    return contains(name, [
-
-        # RBNZ / OCR
-        r"\brbnz interest rate decision\b",
-        r"\brbnz rate decision\b",
-        r"\bofficial cash rate\b",
-        r"\bocr\b",
-        r"\bmonetary policy statement\b",
-
-        # Inflation
-        r"\bcpi \(qoq\)\b",
-        r"\bcpi \(yoy\)\b",
-        r"\binflation rate\b",
-
-        # Labour
-        r"\bemployment change\b",
-        r"^unemployment rate$",
-
-        # GDP
-        r"\bgdp growth rate\b",
-    ])
-
-
-FILTERS = {
-    "EUR": important_eur,
-    "GBP": important_gbp,
-    "JPY": important_jpy,
-    "CHF": important_chf,
-    "CAD": important_cad,
-    "AUD": important_aud,
-    "NZD": important_nzd,
-}
+def is_retail(text):
+    return text.startswith(
+        "retail sales"
+    )
 
 
 # ============================================================
-# GLOBAL EXCLUSIONS
+# UNWANTED EVENTS
 # ============================================================
 
-GLOBAL_EXCLUDE = [
-    r"\bspeech\b",
-    r"\bspeaks\b",
-    r"\btestimony\b",
-    r"\bappearance\b",
+def globally_unwanted(text):
 
-    r"\bconsumer confidence\b",
-    r"\bbusiness confidence\b",
+    unwanted = [
+        "speech",
+        "speaks",
+        "testimony",
+        "hearings",
+        "consumer confidence",
+        "business confidence",
+        "economic sentiment",
+        "bond auction",
+        "bill auction",
+        "trade balance",
+        "current account",
+        "industrial production",
+        "factory orders",
+        "housing starts",
+        "building permits",
+        "house price",
+        "mortgage",
+        "money supply",
+        "credit card",
+        "tourist",
+        "tourism",
+        "vehicle sales",
+        "car registrations",
+        "monthly report",
+        "bulletin",
+    ]
 
-    r"\bproducer price\b",
-    r"\bppi\b",
-
-    r"\btrade balance\b",
-    r"\bcurrent account\b",
-
-    r"\bindustrial production\b",
-    r"\bfactory orders\b",
-
-    r"\bhousing\b",
-    r"\bmortgage\b",
-
-    r"\bbond auction\b",
-    r"\bbill auction\b",
-
-    r"\bcredit card\b",
-    r"\bmoney supply\b",
-
-    r"\btourism\b",
-]
-
-
-def is_important(currency, name):
-
-    if contains(name, GLOBAL_EXCLUDE):
-        return False
-
-    function = FILTERS.get(currency)
-
-    if not function:
-        return False
-
-    return function(name)
+    return has_any(
+        text,
+        unwanted
+    )
 
 
 # ============================================================
-# DATE PARSING
+# EVENT CLASSIFICATION
+#
+# Return:
+#
+#   (family, clean calendar title)
+#
+# or None when event should not be included.
+# ============================================================
+
+def classify_event(currency, name):
+
+    text = normalize(name)
+
+
+    # ========================================================
+    # EUR / ECB
+    # ========================================================
+
+    if currency == "EUR":
+
+        # ECB press conference deserves its own alert.
+        if (
+            "ecb press conference" in text
+            or (
+                "press conference" in text
+                and "ecb" in text
+            )
+        ):
+            return (
+                "ECB_PRESS",
+                "ECB Press Conference"
+            )
+
+        # Merge all simultaneous ECB rate rows.
+        if has_any(text, [
+            "ecb interest rate decision",
+            "ecb rate decision",
+            "ecb monetary policy decision",
+            "monetary policy decision",
+            "deposit facility rate",
+            "main refinancing rate",
+            "main refinancing operations rate",
+            "marginal lending facility rate",
+        ]):
+            return (
+                "ECB_RATE",
+                "ECB Rate Decision"
+            )
+
+
+    # ========================================================
+    # GBP / BANK OF ENGLAND
+    # ========================================================
+
+    if currency == "GBP":
+
+        # Not important enough for this calendar.
+        if "hearings" in text:
+            return None
+
+        # Decision + minutes + MPR become ONE alert.
+        if has_any(text, [
+            "boe interest rate decision",
+            "boe rate decision",
+            "official bank rate",
+            "bank of england interest rate",
+            "boe minutes",
+            "boe monetary policy report",
+        ]):
+            return (
+                "BOE_RATE",
+                "BoE Rate Decision"
+            )
+
+
+    # ========================================================
+    # JPY / BANK OF JAPAN
+    # ========================================================
+
+    if currency == "JPY":
+
+        # Minutes weeks later are not top-tier.
+        if "minutes" in text:
+            return None
+
+        if has_any(text, [
+            "boj interest rate decision",
+            "boj rate decision",
+            "bank of japan interest rate",
+            "boj monetary policy statement",
+            "bank of japan monetary policy statement",
+        ]):
+            return (
+                "BOJ_RATE",
+                "BoJ Rate Decision"
+            )
+
+        if (
+            "press conference" in text
+            and has_any(text, [
+                "boj",
+                "bank of japan",
+            ])
+        ):
+            return (
+                "BOJ_PRESS",
+                "BoJ Press Conference"
+            )
+
+
+    # ========================================================
+    # CHF / SNB
+    # ========================================================
+
+    if currency == "CHF":
+
+        if has_any(text, [
+            "snb interest rate decision",
+            "snb rate decision",
+            "snb policy rate",
+            "swiss national bank interest rate",
+        ]):
+            return (
+                "SNB_RATE",
+                "SNB Rate Decision"
+            )
+
+        if (
+            "press conference" in text
+            and has_any(text, [
+                "snb",
+                "swiss national bank",
+            ])
+        ):
+            return (
+                "SNB_PRESS",
+                "SNB Press Conference"
+            )
+
+
+    # ========================================================
+    # CAD / BANK OF CANADA
+    # ========================================================
+
+    if currency == "CAD":
+
+        # Decision + MPR become ONE alert.
+        if has_any(text, [
+            "boc interest rate decision",
+            "boc rate decision",
+            "bank of canada interest rate",
+            "overnight rate",
+            "boc monetary policy report",
+            "bank of canada monetary policy report",
+        ]):
+            return (
+                "BOC_RATE",
+                "BoC Rate Decision"
+            )
+
+        if (
+            "press conference" in text
+            and has_any(text, [
+                "boc",
+                "bank of canada",
+            ])
+        ):
+            return (
+                "BOC_PRESS",
+                "BoC Press Conference"
+            )
+
+
+    # ========================================================
+    # AUD / RBA
+    # ========================================================
+
+    if currency == "AUD":
+
+        if has_any(text, [
+            "rba interest rate decision",
+            "rba rate decision",
+            "rba cash rate",
+            "cash rate target",
+            "reserve bank of australia interest rate",
+            "monetary policy decision",
+        ]):
+            return (
+                "RBA_RATE",
+                "RBA Rate Decision"
+            )
+
+        if (
+            "rba" in text
+            and has_any(text, [
+                "press conference",
+                "media conference",
+            ])
+        ):
+            return (
+                "RBA_PRESS",
+                "RBA Press Conference"
+            )
+
+
+    # ========================================================
+    # NZD / RBNZ
+    # ========================================================
+
+    if currency == "NZD":
+
+        # Decision + MPS become ONE alert.
+        if has_any(text, [
+            "rbnz interest rate decision",
+            "rbnz rate decision",
+            "official cash rate",
+            "rbnz monetary policy statement",
+            "reserve bank of new zealand interest rate",
+        ]):
+            return (
+                "RBNZ_RATE",
+                "RBNZ Rate Decision"
+            )
+
+        # Avoid matching unrelated words containing "ocr".
+        if re.search(
+            r"\bocr\b",
+            text
+        ):
+            return (
+                "RBNZ_RATE",
+                "RBNZ Rate Decision"
+            )
+
+        if (
+            "press conference" in text
+            and has_any(text, [
+                "rbnz",
+                "reserve bank of new zealand",
+            ])
+        ):
+            return (
+                "RBNZ_PRESS",
+                "RBNZ Press Conference"
+            )
+
+
+    # ========================================================
+    # DROP GENERIC LOW-PRIORITY MATERIAL
+    # ========================================================
+
+    if globally_unwanted(text):
+        return None
+
+
+    # ========================================================
+    # EUR MACRO
+    # ========================================================
+
+    if currency == "EUR":
+
+        if is_cpi(text):
+            return (
+                "EUR_CPI",
+                "Eurozone CPI"
+            )
+
+        if is_gdp(text):
+            return (
+                "EUR_GDP",
+                "Eurozone GDP"
+            )
+
+        # Manufacturing / services / composite at same time
+        # will be collapsed to one PMI event.
+        if is_pmi(text):
+            return (
+                "EUR_PMI",
+                "Eurozone PMI"
+            )
+
+        return None
+
+
+    # ========================================================
+    # GBP MACRO
+    # ========================================================
+
+    if currency == "GBP":
+
+        if is_cpi(text):
+            return (
+                "GBP_CPI",
+                "UK CPI"
+            )
+
+        if has_any(text, [
+            "claimant count change",
+            "employment change",
+            "unemployment rate",
+            "average earnings",
+            "average weekly earnings",
+        ]):
+            return (
+                "GBP_JOBS",
+                "UK Labour Market"
+            )
+
+        if is_gdp(text):
+            return (
+                "GBP_GDP",
+                "UK GDP"
+            )
+
+        if is_pmi(text):
+            return (
+                "GBP_PMI",
+                "UK PMI"
+            )
+
+        if is_retail(text):
+            return (
+                "GBP_RETAIL",
+                "UK Retail Sales"
+            )
+
+        return None
+
+
+    # ========================================================
+    # JPY MACRO
+    # ========================================================
+
+    if currency == "JPY":
+
+        if is_cpi(text):
+
+            if "tokyo" in text:
+                return (
+                    "JPY_TOKYO_CPI",
+                    "Tokyo CPI"
+                )
+
+            if (
+                "national" in text
+                or "japan" in text
+                or "cpi" in text
+            ):
+                return (
+                    "JPY_CPI",
+                    "Japan CPI"
+                )
+
+        if is_gdp(text):
+            return (
+                "JPY_GDP",
+                "Japan GDP"
+            )
+
+        return None
+
+
+    # ========================================================
+    # CHF MACRO
+    # ========================================================
+
+    if currency == "CHF":
+
+        if is_cpi(text):
+            return (
+                "CHF_CPI",
+                "Swiss CPI"
+            )
+
+        if is_gdp(text):
+            return (
+                "CHF_GDP",
+                "Swiss GDP"
+            )
+
+        return None
+
+
+    # ========================================================
+    # CAD MACRO
+    # ========================================================
+
+    if currency == "CAD":
+
+        if is_cpi(text):
+            return (
+                "CAD_CPI",
+                "Canada CPI"
+            )
+
+        if has_any(text, [
+            "employment change",
+            "unemployment rate",
+        ]):
+            return (
+                "CAD_JOBS",
+                "Canada Jobs"
+            )
+
+        if is_gdp(text):
+            return (
+                "CAD_GDP",
+                "Canada GDP"
+            )
+
+        if is_retail(text):
+            return (
+                "CAD_RETAIL",
+                "Canada Retail Sales"
+            )
+
+        return None
+
+
+    # ========================================================
+    # AUD MACRO
+    # ========================================================
+
+    if currency == "AUD":
+
+        if is_cpi(text):
+            return (
+                "AUD_CPI",
+                "Australia CPI"
+            )
+
+        if has_any(text, [
+            "employment change",
+            "unemployment rate",
+        ]):
+            return (
+                "AUD_JOBS",
+                "Australia Jobs"
+            )
+
+        if is_gdp(text):
+            return (
+                "AUD_GDP",
+                "Australia GDP"
+            )
+
+        return None
+
+
+    # ========================================================
+    # NZD MACRO
+    # ========================================================
+
+    if currency == "NZD":
+
+        if is_cpi(text):
+            return (
+                "NZD_CPI",
+                "New Zealand CPI"
+            )
+
+        if has_any(text, [
+            "employment change",
+            "unemployment rate",
+        ]):
+            return (
+                "NZD_JOBS",
+                "New Zealand Jobs"
+            )
+
+        if is_gdp(text):
+            return (
+                "NZD_GDP",
+                "New Zealand GDP"
+            )
+
+        return None
+
+
+    return None
+
+
+# ============================================================
+# SOURCE DATE PARSING
+#
+# Near-term central-bank dates have been cross-checked against
+# official schedules. Source timestamps are UTC.
 # ============================================================
 
 def parse_datetime(value):
 
     value = str(value).strip()
 
+    # Source format:
+    # MM/DD/YYYY HH:MM:SS
     try:
-        return datetime.strptime(
+        dt = datetime.strptime(
             value,
             "%m/%d/%Y %H:%M:%S"
+        )
+
+        return dt.replace(
+            tzinfo=timezone.utc
         )
 
     except ValueError:
         pass
 
     # ISO fallback
-    value = value.replace(
-        "Z",
-        "+00:00"
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+
+    dt = datetime.fromisoformat(
+        value
     )
 
-    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(
+            tzinfo=timezone.utc
+        )
 
-    # Keep source time naive until timezone
-    # has been verified.
-    return dt.replace(
-        tzinfo=None
+    return dt.astimezone(
+        timezone.utc
     )
 
 
 # ============================================================
-# ICS HELPERS
+# API HELPERS
 # ============================================================
-
-def escape_ics(value):
-
-    return (
-        str(value or "")
-        .replace("\\", "\\\\")
-        .replace(";", "\\;")
-        .replace(",", "\\,")
-        .replace("\n", "\\n")
-    )
-
 
 def extract_events(data):
 
@@ -403,57 +697,173 @@ def extract_events(data):
             "results",
             "items",
         ]:
-
             value = data.get(key)
 
-            if isinstance(value, list):
+            if isinstance(
+                value,
+                list
+            ):
                 return value
 
     return []
 
 
 # ============================================================
-# DATE WINDOW
+# ICS HELPERS
 # ============================================================
 
-now = datetime.utcnow()
+def escape_ics(value):
 
-today = now.replace(
-    hour=0,
-    minute=0,
-    second=0,
-    microsecond=0,
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+    )
+
+
+# RFC 5545 recommends lines no longer than 75 octets.
+def fold_ics_line(line):
+
+    result = []
+
+    current = ""
+    first_line = True
+
+    for char in line:
+
+        limit = (
+            75
+            if first_line
+            else 74
+        )
+
+        candidate = (
+            current + char
+        )
+
+        if (
+            current
+            and len(
+                candidate.encode("utf-8")
+            ) > limit
+        ):
+
+            if first_line:
+                result.append(
+                    current
+                )
+
+                first_line = False
+
+            else:
+                result.append(
+                    " " + current
+                )
+
+            current = char
+
+        else:
+            current = candidate
+
+    if current:
+
+        if first_line:
+            result.append(
+                current
+            )
+
+        else:
+            result.append(
+                " " + current
+            )
+
+    return result
+
+
+def add_ics_line(lines, line):
+
+    lines.extend(
+        fold_ics_line(line)
+    )
+
+
+# ============================================================
+# ROLLING DATE WINDOW
+# ============================================================
+
+now = datetime.now(
+    timezone.utc
 )
 
-end = today + timedelta(
-    days=365
+start_day = (
+    now
+    - timedelta(
+        days=LOOKBACK_DAYS
+    )
+).date()
+
+end_day = (
+    now
+    + timedelta(
+        days=LOOKAHEAD_DAYS
+    )
+).date()
+
+
+start_string = (
+    start_day.isoformat()
 )
 
-start_string = today.strftime(
-    "%Y-%m-%d"
+end_string = (
+    end_day.isoformat()
 )
 
-end_string = end.strftime(
-    "%Y-%m-%d"
+
+range_start = datetime(
+    start_day.year,
+    start_day.month,
+    start_day.day,
+    tzinfo=timezone.utc,
+)
+
+range_end = datetime(
+    end_day.year,
+    end_day.month,
+    end_day.day,
+    23,
+    59,
+    59,
+    tzinfo=timezone.utc,
+)
+
+
+print(
+    "Calendar window:",
+    start_string,
+    "to",
+    end_string,
 )
 
 
 # ============================================================
-# DOWNLOAD
+# FETCH RAW EVENTS
 # ============================================================
 
-def fetch_country(country, currency):
+def fetch_country(
+    country,
+    currency
+):
 
     print("")
     print(
-        f"Fetching ALL {country} ({currency}) events..."
+        f"Fetching {country} "
+        f"({currency})..."
     )
 
-    # IMPORTANT:
-    # NO impact=HIGH.
-    #
-    # We download the country calendar and decide
-    # ourselves what is important.
     response = requests.get(
         API,
         params={
@@ -465,7 +875,7 @@ def fetch_country(country, currency):
     )
 
     print(
-        "Status:",
+        "HTTP:",
         response.status_code
     )
 
@@ -475,8 +885,14 @@ def fetch_country(country, currency):
         response.json()
     )
 
+    if not rows:
+        raise RuntimeError(
+            f"{country} returned zero rows. "
+            "Refusing to publish an incomplete calendar."
+        )
+
     print(
-        "API rows:",
+        "Raw rows:",
         len(rows)
     )
 
@@ -484,7 +900,10 @@ def fetch_country(country, currency):
 
     for row in rows:
 
-        if not isinstance(row, dict):
+        if not isinstance(
+            row,
+            dict
+        ):
             continue
 
         name = (
@@ -498,21 +917,34 @@ def fetch_country(country, currency):
             row.get("Start")
             or row.get("start")
             or row.get("datetime")
+            or row.get("Date")
             or row.get("date")
         )
 
-        if not name or not start:
-            continue
-
-        if not is_important(
-            currency,
-            name
+        if (
+            not name
+            or not start
         ):
             continue
 
-        try:
+        classification = (
+            classify_event(
+                currency,
+                name
+            )
+        )
 
-            dt = parse_datetime(start)
+        if not classification:
+            continue
+
+        family, clean_title = (
+            classification
+        )
+
+        try:
+            dt = parse_datetime(
+                start
+            )
 
         except Exception as error:
 
@@ -524,34 +956,43 @@ def fetch_country(country, currency):
 
             continue
 
+        # Protect against the API ignoring date parameters.
+        if not (
+            range_start
+            <= dt
+            <= range_end
+        ):
+            continue
+
+        source_id = (
+            row.get("Id")
+            or row.get("id")
+            or ""
+        )
+
         accepted.append({
             "country": country,
             "currency": currency,
-            "name": str(name),
+            "family": family,
+            "title": clean_title,
+            "source_name": str(name),
+            "source_id": str(source_id),
             "dt": dt,
-            "source_id": (
-                row.get("Id")
-                or row.get("id")
-            ),
         })
 
     print(
-        "Accepted:",
+        "Accepted raw events:",
         len(accepted)
     )
 
     return accepted
 
 
-# ============================================================
-# COLLECT
-# ============================================================
-
-events = []
+raw_events = []
 
 for country, currency in COUNTRIES.items():
 
-    events.extend(
+    raw_events.extend(
         fetch_country(
             country,
             currency
@@ -560,40 +1001,82 @@ for country, currency in COUNTRIES.items():
 
 
 # ============================================================
-# DEDUPLICATE
+# MERGE SIMULTANEOUS DUPLICATES
+#
+# Examples:
+#
+# BoE Rate Decision + Minutes + MPR
+#   -> ONE BoE Rate Decision event
+#
+# CPI MoM + CPI YoY + Core CPI
+#   -> ONE CPI event
+#
+# Manufacturing + Services PMI
+#   -> ONE PMI event
 # ============================================================
 
-unique = {}
+groups = {}
 
-for event in events:
+
+for event in raw_events:
 
     key = (
-        event["country"],
         event["currency"],
-        normalize(event["name"]),
-        event["dt"].isoformat(),
+        event["family"],
+        event["dt"],
     )
 
-    unique[key] = event
+    if key not in groups:
+
+        groups[key] = {
+            "currency": event["currency"],
+            "family": event["family"],
+            "title": event["title"],
+            "dt": event["dt"],
+            "source_names": set(),
+            "source_ids": set(),
+        }
+
+    groups[key][
+        "source_names"
+    ].add(
+        event["source_name"]
+    )
+
+    if event["source_id"]:
+
+        groups[key][
+            "source_ids"
+        ].add(
+            event["source_id"]
+        )
 
 
 events = list(
-    unique.values()
+    groups.values()
 )
 
 events.sort(
-    key=lambda event: event["dt"]
+    key=lambda event:
+        event["dt"]
 )
 
 
 # ============================================================
-# LOG RESULTS
+# OUTPUT CHECKS
 # ============================================================
 
 print("")
-print("==============================")
-print("FINAL EVENTS:", len(events))
-print("==============================")
+print(
+    "=============================="
+)
+print(
+    "FINAL MERGED EVENTS:",
+    len(events)
+)
+print(
+    "=============================="
+)
 
 
 for currency in [
@@ -609,100 +1092,68 @@ for currency in [
     currency_events = [
         event
         for event in events
-        if event["currency"] == currency
+        if event["currency"]
+        == currency
     ]
 
     print("")
     print(
-        f"{currency}: {len(currency_events)}"
+        f"{currency}: "
+        f"{len(currency_events)}"
     )
 
-    names = sorted(
-        {
-            event["name"]
-            for event in currency_events
-        }
-    )
-
-    for name in names:
+    for event in currency_events:
 
         print(
-            f"  - {name}"
+            " ",
+            event["dt"].strftime(
+                "%Y-%m-%d %H:%M UTC"
+            ),
+            "-",
+            event["title"]
         )
 
 
 # ============================================================
-# IMPORTANT CENTRAL BANK CHECK
+# CENTRAL BANK SANITY CHECK
 # ============================================================
 
 print("")
-print("==============================")
-print("CENTRAL BANK CHECK")
-print("==============================")
+print(
+    "=============================="
+)
+print(
+    "CENTRAL BANK CHECK"
+)
+print(
+    "=============================="
+)
 
 
-BANK_TERMS = {
-    "EUR": [
-        "ecb",
-        "deposit facility",
-        "refinancing",
-    ],
+for currency in [
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+]:
 
-    "GBP": [
-        "boe",
-        "official bank rate",
-        "bank of england",
-    ],
-
-    "JPY": [
-        "boj",
-        "bank of japan",
-    ],
-
-    "CHF": [
-        "snb",
-        "swiss national bank",
-    ],
-
-    "CAD": [
-        "boc",
-        "bank of canada",
-        "overnight rate",
-    ],
-
-    "AUD": [
-        "rba",
-        "cash rate",
-        "monetary policy decision",
-    ],
-
-    "NZD": [
-        "rbnz",
-        "official cash rate",
-        "ocr",
-        "monetary policy statement",
-    ],
-}
-
-
-for currency, terms in BANK_TERMS.items():
-
-    bank_events = []
-
-    for event in events:
-
-        if event["currency"] != currency:
-            continue
-
-        text = normalize(
-            event["name"]
+    bank_events = [
+        event
+        for event in events
+        if (
+            event["currency"]
+            == currency
+            and (
+                "_RATE"
+                in event["family"]
+                or "_PRESS"
+                in event["family"]
+            )
         )
-
-        if any(
-            term in text
-            for term in terms
-        ):
-            bank_events.append(event)
+    ]
 
     print("")
     print(
@@ -713,10 +1164,12 @@ for currency, terms in BANK_TERMS.items():
     for event in bank_events:
 
         print(
-            "  ",
-            event["dt"],
+            " ",
+            event["dt"].strftime(
+                "%Y-%m-%d %H:%M UTC"
+            ),
             "-",
-            event["name"]
+            event["title"]
         )
 
 
@@ -729,90 +1182,208 @@ dtstamp = now.strftime(
 )
 
 
-lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//saafman-dev//Global Forex High Impact//EN",
-    "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
-    "X-WR-CALNAME:🌍 Global Forex — High Impact",
-    "X-WR-CALDESC:Major forex market events excluding USD",
-]
+lines = []
+
+add_ics_line(
+    lines,
+    "BEGIN:VCALENDAR"
+)
+
+add_ics_line(
+    lines,
+    "VERSION:2.0"
+)
+
+add_ics_line(
+    lines,
+    "PRODID:-//saafman-dev//Global Forex High Impact//EN"
+)
+
+add_ics_line(
+    lines,
+    "CALSCALE:GREGORIAN"
+)
+
+add_ics_line(
+    lines,
+    "METHOD:PUBLISH"
+)
+
+add_ics_line(
+    lines,
+    "X-WR-CALNAME:🌍 Global Forex — High Impact"
+)
+
+add_ics_line(
+    lines,
+    "X-WR-CALDESC:Major forex market events excluding USD"
+)
+
+add_ics_line(
+    lines,
+    "REFRESH-INTERVAL;VALUE=DURATION:PT6H"
+)
+
+add_ics_line(
+    lines,
+    "X-PUBLISHED-TTL:PT6H"
+)
 
 
 for event in events:
 
-    # Still intentionally no Z.
-    # We'll fix timezone after validating the
-    # source timestamps.
-    start = event["dt"].strftime(
-        "%Y%m%dT%H%M%S"
+    start = event[
+        "dt"
+    ].strftime(
+        "%Y%m%dT%H%M%SZ"
     )
 
-    if event["source_id"]:
+    # Prefer a stable source ID.
+    ids = sorted(
+        event["source_ids"]
+    )
 
-        uid_base = str(
-            event["source_id"]
+    if ids:
+
+        uid_seed = (
+            f"{event['currency']}|"
+            f"{event['family']}|"
+            f"{ids[0]}"
         )
 
     else:
 
-        uid_base = (
-            f"{event['country']}|"
+        uid_seed = (
             f"{event['currency']}|"
-            f"{event['name']}|"
+            f"{event['family']}|"
             f"{event['dt'].isoformat()}"
         )
 
     uid_hash = hashlib.sha256(
-        uid_base.encode("utf-8")
+        uid_seed.encode(
+            "utf-8"
+        )
     ).hexdigest()[:24]
 
     uid = (
         f"{uid_hash}"
-        f"@saafman-dev.github.io"
+        "@saafman-dev.github.io"
     )
 
-    lines.extend([
 
-        "BEGIN:VEVENT",
+    source_names = sorted(
+        event["source_names"]
+    )
 
-        f"UID:{uid}",
+    description = (
+        "Major market event. "
+        "Underlying releases: "
+        + "; ".join(
+            source_names
+        )
+    )
 
-        f"DTSTAMP:{dtstamp}",
 
-        f"DTSTART:{start}",
+    add_ics_line(
+        lines,
+        "BEGIN:VEVENT"
+    )
 
+    add_ics_line(
+        lines,
+        f"UID:{uid}"
+    )
+
+    add_ics_line(
+        lines,
+        f"DTSTAMP:{dtstamp}"
+    )
+
+    add_ics_line(
+        lines,
+        f"LAST-MODIFIED:{dtstamp}"
+    )
+
+    add_ics_line(
+        lines,
+        f"DTSTART:{start}"
+    )
+
+    # Small visible duration in Apple Calendar.
+    add_ics_line(
+        lines,
+        "DURATION:PT5M"
+    )
+
+    add_ics_line(
+        lines,
         (
             f"SUMMARY:🔴 "
             f"{event['currency']} — "
-            f"{escape_ics(event['name'])}"
-        ),
+            f"{escape_ics(event['title'])}"
+        )
+    )
 
+    add_ics_line(
+        lines,
         (
-            f"DESCRIPTION:"
-            f"Major {event['currency']} "
-            f"economic event."
-        ),
+            "DESCRIPTION:"
+            + escape_ics(
+                description
+            )
+        )
+    )
 
-        "BEGIN:VALARM",
+    add_ics_line(
+        lines,
+        "STATUS:CONFIRMED"
+    )
 
-        "TRIGGER:-PT30M",
+    add_ics_line(
+        lines,
+        "TRANSP:TRANSPARENT"
+    )
 
-        "ACTION:DISPLAY",
+    add_ics_line(
+        lines,
+        "BEGIN:VALARM"
+    )
 
-        "DESCRIPTION:Major market event in 30 minutes",
+    add_ics_line(
+        lines,
+        "TRIGGER:-PT30M"
+    )
 
-        "END:VALARM",
+    add_ics_line(
+        lines,
+        "ACTION:DISPLAY"
+    )
 
-        "END:VEVENT",
-    ])
+    add_ics_line(
+        lines,
+        "DESCRIPTION:Major market event in 30 minutes"
+    )
+
+    add_ics_line(
+        lines,
+        "END:VALARM"
+    )
+
+    add_ics_line(
+        lines,
+        "END:VEVENT"
+    )
 
 
-lines.append(
+add_ics_line(
+    lines,
     "END:VCALENDAR"
 )
 
+
+# ============================================================
+# SAVE
+# ============================================================
 
 with open(
     "global-forex-high.ics",
@@ -828,10 +1399,14 @@ with open(
 
 
 print("")
-print("==============================")
+print(
+    "=============================="
+)
 print(
     "Calendar created with",
     len(events),
-    "events."
+    "merged events."
 )
-print("==============================")
+print(
+    "=============================="
+)
